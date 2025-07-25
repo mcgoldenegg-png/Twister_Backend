@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const continentController = require('../controllers/ContinentController');
+const continentController = require('../controllers/continentController');
 // const authMiddleware = require("../middleware/authMiddleware");
 
 // // Protect all video routes

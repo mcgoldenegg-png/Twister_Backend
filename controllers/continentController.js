@@ -4,10 +4,10 @@ const Country = require("../models/Country");
 
 exports.insertContinent = async (req, res) => {
   try {
-    const { name, countries } = req.body;
+    const { name, code } = req.body;
     const continent = await Continent.create({
       name,
-      countries: countries || []
+      code: code
     });
     return ApiResponse.created(res, "Continent Crested Successfully!", continent);
   } catch (error) {
