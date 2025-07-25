@@ -83,44 +83,37 @@ exports.initiateLogin = async (req, res) => {
 exports.verifyLogin = async (req, res) => {
   try {
     const { phoneNumber, code } = req.body;
-
-    // Find user
     const user = await User.findOne({ where: { phoneNumber } });
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
 
-    // Check if code matches and is not expired
+    if (!user) return res.status(404).json({ error: "User not found" });
+
     if (
       user.verificationCode !== code ||
       new Date(user.verificationCodeExpires) < new Date()
     ) {
-      return ApiResponse.error(
-        res,
-        "Invalid or expired verification code",
-        400
-      );
+      return ApiResponse.error(res, "Invalid or expired verification code", 400);
     }
 
-    // Mark user as verified if they weren't already
-    if (!user.isVerified) {
-      user.isVerified = true;
-    }
+    if (!user.isVerified) user.isVerified = true;
 
-    // Clear verification data
     user.verificationCode = null;
     user.verificationCodeExpires = null;
     user.lastLogin = new Date();
     await user.save();
 
-    // Generate JWT token
-    const token = jwt.sign(
-      { userId: user.id, phoneNumber: user.phoneNumber },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    const payload = { userId: user.id, phoneNumber: user.phoneNumber };
+
+    const jwtAccessToken = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: process.env.JWT_EXPIRES_IN || "15m",
+    });
+
+    const jwtRefreshToken = jwt.sign(payload, process.env.JWT_REFRESH_SECRET, {
+      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "7d",
+    });
+
     return ApiResponse.success(res, "Login successful", {
-      token,
+      jwtAccessToken,
+      jwtRefreshToken,
       user: {
         id: user.id,
         phoneNumber: user.phoneNumber,
@@ -133,3 +126,34 @@ exports.verifyLogin = async (req, res) => {
     ApiResponse.error(res, "Server error during verification", 500, error);
   }
 };
+
+// Refresh JWT token
+exports.refreshToken = async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(401).json({ error: "Refresh token required" });
+    }
+
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+
+    const user = await User.findByPk(decoded.userId);
+    if (!user) {
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    const newAccessToken = jwt.sign(
+      { userId: user.id, phoneNumber: user.phoneNumber },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || "15m" }
+    );
+
+    res.json({ accessToken: newAccessToken });
+  } catch (error) {
+    console.error("Refresh token error:", error);
+    return res.status(403).json({ error: "Invalid or expired refresh token" });
+  }
+};
+
+

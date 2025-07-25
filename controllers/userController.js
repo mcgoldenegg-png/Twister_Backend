@@ -14,6 +14,7 @@ exports.getUserProfile = async (req, res) => {
       attributes: [
         "id",
         "name",
+        "continentId",
         "phoneNumber",
         "countryCode",
         "profileImage",
@@ -40,7 +41,7 @@ exports.getUserProfile = async (req, res) => {
 exports.updateUserProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { name } = req.body;
+    const { name, continentId } = req.body;
 
     // Fetch user first
     const user = await User.findByPk(userId);
@@ -68,6 +69,7 @@ exports.updateUserProfile = async (req, res) => {
     // Update user
     await user.update({
       name: name || user.name,
+      continentId: continentId || user.continentId,
       profileImage: profileImagePath,
     });
 
@@ -75,6 +77,7 @@ exports.updateUserProfile = async (req, res) => {
       attributes: [
         "id",
         "name",
+        "continentId",
         "phoneNumber",
         "countryCode",
         "profileImage",

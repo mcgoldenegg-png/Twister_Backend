@@ -87,8 +87,6 @@ exports.uploadVideoLocal = async (req, res) => {
     // Create video record in database
     const video = await Video.create({
       userId: req.user.id,
-      title: req.body.title,
-      description: req.body.description,
       originalName: req.file.originalname,
       fileName: watermarkedFilename,
       filePath: outputPath,

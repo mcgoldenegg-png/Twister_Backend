@@ -7,6 +7,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const path = require("path");
 const authRoutes = require("./routes/authRoutes");
+const userRoutes = require("./routes/userRoutes");
 const activityRoutes = require("./routes/activityRoutes");
 const continentRoutes = require("./routes/continentRoutes");
 const countriesRoutes = require("./routes/countryRoutes");
@@ -29,6 +30,7 @@ app.get("/", (req, res) => res.send("Server is running"));
 app.use("/api/v1/continent", continentRoutes);
 app.use("/api/v1/activity", activityRoutes);
 app.use("/api/v1/countries", countriesRoutes);
+app.use("/api/v1/user", userRoutes);
 app.use("/api/v1/auth", authRoutes);
 
 const PORT = process.env.PORT || 3000;

@@ -13,6 +13,10 @@ const Continent = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
       unique: true
+    },
+    code: {
+      type: DataTypes.STRING,
+      allowNull: false,
     }
   },
   {
@@ -28,6 +32,10 @@ Continent.associate = (models) => {
   Continent.hasMany(models.Video, {
     foreignKey: "continentId",
     as: "videos",
+  });
+  Continent.hasMany(models.Video, {
+    foreignKey: "continentId",
+    as: "user",
   });
   Continent.belongsToMany(models.Video, {
     through: "VideoContinentRating",

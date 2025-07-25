@@ -9,6 +9,13 @@ const User = sequelize.define(
             primaryKey: true,
             autoIncrement: true,
         },
+        continentId: {
+            type: DataTypes.INTEGER,
+            references: {
+                model: "Continents",
+                key: "id",
+            },
+        },
         phoneNumber: {
             type: DataTypes.STRING,
             allowNull: false,
