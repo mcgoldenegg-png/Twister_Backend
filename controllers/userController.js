@@ -41,8 +41,6 @@ exports.getUserProfile = async (req, res) => {
 exports.updateUserProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { name, continentId } = req.body;
-
     // Fetch user first
     const user = await User.findByPk(userId);
     if (!user) {
@@ -50,6 +48,7 @@ exports.updateUserProfile = async (req, res) => {
     }
 
     let profileImagePath = user.profileImage;
+      console.log('req.file: ', req.file);
 
     // If new image is uploaded
     if (req.file) {
@@ -68,8 +67,8 @@ exports.updateUserProfile = async (req, res) => {
 
     // Update user
     await user.update({
-      name: name || user.name,
-      continentId: continentId || user.continentId,
+      name: req.body?.name || user.name,
+      continentId: req.body?.continentId || user.continentId,
       profileImage: profileImagePath,
     });
 

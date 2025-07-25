@@ -23,6 +23,9 @@ app.use(helmet());
 // Database connection
 require("./config/database");
 
+app.use("/videos", express.static(path.join(__dirname, 'videos')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // Routes
 app.get("/", (req, res) => res.send("Server is running"));
 
