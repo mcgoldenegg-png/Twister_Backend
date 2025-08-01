@@ -11,6 +11,7 @@ const userRoutes = require("./routes/userRoutes");
 const activityRoutes = require("./routes/activityRoutes");
 const continentRoutes = require("./routes/continentRoutes");
 const countriesRoutes = require("./routes/countryRoutes");
+const videoRoutes = require("./routes/videoRoutes");
 
 const app = express();
 
@@ -22,6 +23,9 @@ app.use(helmet());
 
 // Database connection
 require("./config/database");
+app.use("/videos", express.static(path.join(__dirname, 'videos')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/thumbnails', express.static(path.join(__dirname, 'thumbnails')));
 
 // Routes
 app.get("/", (req, res) => res.send("Server is running"));
@@ -30,6 +34,7 @@ app.get("/", (req, res) => res.send("Server is running"));
 app.use("/api/v1/continent", continentRoutes);
 app.use("/api/v1/activity", activityRoutes);
 app.use("/api/v1/countries", countriesRoutes);
+app.use("/api/v1/videos", videoRoutes);
 app.use("/api/v1/user", userRoutes);
 app.use("/api/v1/auth", authRoutes);
 

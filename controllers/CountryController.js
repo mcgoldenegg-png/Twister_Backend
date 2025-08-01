@@ -1102,7 +1102,7 @@ exports.getAllCountry = async (req, res) => {
         const countries = await Country.findAndCountAll({
             where,
             include,
-            attributes: ['id', 'name', 'emoji', 'dial_code', 'continentId'],
+            attributes: ['id', 'name', 'emoji', 'isoCode', 'dial_code', 'continentId'],
             order: [['name', 'ASC']],
         });
 

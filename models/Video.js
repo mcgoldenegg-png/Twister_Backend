@@ -56,6 +56,11 @@ const Video = sequelize.define(
       allowNull: false,
       defaultValue: false,
     },
+    promotionStatus: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
     originalName: {
       type: DataTypes.STRING,
       allowNull: false,

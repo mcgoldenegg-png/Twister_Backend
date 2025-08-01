@@ -33,7 +33,11 @@ Continent.associate = (models) => {
     foreignKey: "continentId",
     as: "videos",
   });
-  Continent.hasMany(models.Video, {
+  Continent.hasMany(models.Rating, {
+    foreignKey: "continentId",
+    as: "ratings",
+  });
+  Continent.hasMany(models.User, {
     foreignKey: "continentId",
     as: "user",
   });

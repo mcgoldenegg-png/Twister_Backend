@@ -30,6 +30,10 @@ const Country = sequelize.define(
                 key: "id",
             },
         },
+        isoCode: {
+            type: DataTypes.STRING, // e.g., "US"
+            allowNull: false,
+        },
     },
     {
         timestamps: true,

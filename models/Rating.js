@@ -53,6 +53,12 @@ Rating.associate = (models) => {
     foreignKey: "videoId",
     as: "video",
   });
+
+  // A Video belongs to a Continent
+  Rating.belongsTo(models.Continent, {
+    foreignKey: "continentId",
+    as: "ratingContinent",
+  });
 };
 
 module.exports = Rating;
