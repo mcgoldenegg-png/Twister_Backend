@@ -1,17 +1,127 @@
 const { Video, User, Rating, Like, Continent, Activity } = require("../models");
 const ApiResponse = require("../utils/apiResponse");
 const { Sequelize } = require("sequelize");
-const { exec } = require('child_process');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static');
-
-// Set the FFmpeg path explicitly
-ffmpeg.setFfmpegPath(ffmpegPath);
 const fs = require("fs");
 const path = require("path");
+const { uploadToS3, updateInS3 } = require("../middleware/s3Middleware");
+const { compressVideo, processVideoWithWatermark, cleanTempFiles, isCloudFrontUrl } = require("../utils/videoService");
 
+
+exports.uploadOnBucket = async (req, res) => {
+  // Initialize all file paths
+  let tempPaths = {
+    original: req.file?.path || '',
+    compressed: '',
+    watermarked: ''
+  };
+
+  try {
+    // 1. Validate request
+    if (!req.file) {
+      return ApiResponse.error(res, "No file uploaded", 400);
+    }
+
+    // 2. Verify user exists
+    const user = await User.findByPk(req.user.id);
+    if (!user) {
+      cleanTempFiles(tempPaths);
+      return ApiResponse.error(res, "User not found", 404);
+    }
+
+    // 3. Validate required fields
+    if (!req.body.continentId || !req.body.activityId) {
+      cleanTempFiles(tempPaths);
+      return ApiResponse.error(res, "Continent ID and Activity ID are required", 400);
+    }
+
+    // 4. Prepare directories and paths
+    const tempDir = path.join(__dirname, '../videos');
+    const assetsDir = path.join(__dirname, '../assets');
+
+    // Create directories if they don't exist
+    [tempDir, assetsDir].forEach(dir => {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    });
+
+    // 5. Check watermark exists
+    const watermarkPath = path.join(assetsDir, 'mark.png');
+    if (!fs.existsSync(watermarkPath)) {
+      cleanTempFiles(tempPaths);
+      return ApiResponse.error(res, "Watermark image not found", 400);
+    }
+
+    // 6. Generate safe filenames
+    const timestamp = Date.now();
+    const ext = path.extname(req.file.originalname);
+    const finalFilename = `vid_${timestamp}_wm${ext}`;
+
+
+    // Set all temporary file paths
+    tempPaths.compressed = path.join(tempDir, `${finalFilename}_compressed${ext}`);
+    tempPaths.watermarked = path.join(tempDir, `${finalFilename}`);
+
+    // 7. Process video (compression + watermark)
+    await compressVideo(tempPaths.original, tempPaths.compressed);
+    await processVideoWithWatermark(
+      tempPaths.compressed,
+      tempPaths.watermarked,
+      watermarkPath
+    );
+
+    // 8. Verify processed file exists before upload
+    if (!fs.existsSync(tempPaths.watermarked)) {
+      throw new Error('Processed video file was not created');
+    }
+
+    // 9. Upload to S3
+    const s3Key = `videos/user_${user.id}/${finalFilename}`;
+    const uploadResult = await uploadToS3(
+      tempPaths.watermarked,
+      process.env.S3_BUCKET_NAME,
+      s3Key,
+      req.file.mimetype
+    );
+
+    // 10. Create database record
+    const video = await Video.create({
+      userId: user.id,
+      originalName: req.file.originalname,
+      fileName: finalFilename,
+      filePath: s3Key,
+      fileSize: fs.statSync(tempPaths.watermarked).size,
+      mimeType: req.file.mimetype,
+      fileUrl: uploadResult.Location,
+      continentId: req.body.continentId,
+      activityId: req.body.activityId,
+      isPromotion: req.body.isPromotion || false,
+      duration: req.body.duration || await getVideoDuration(tempPaths.watermarked)
+    });
+
+    // 11. Clean up
+    cleanTempFiles(tempPaths);
+
+    return ApiResponse.created(res, "Video uploaded successfully", video);
+
+  } catch (error) {
+    console.error("Upload error:", error);
+    cleanTempFiles(tempPaths);
+
+    return ApiResponse.error(res,
+      error.message.includes('ENOENT')
+        ? "File processing failed - temporary files not found"
+        : "Video upload failed",
+      500,
+      error
+    );
+  }
+};
 
 exports.uploadVideoLocal = async (req, res) => {
+  let compressedPath = '';
+  let watermarkedPath = '';
+
   try {
     if (!req.file) {
       return ApiResponse.error(res, "No file uploaded", 400);
@@ -30,362 +140,238 @@ exports.uploadVideoLocal = async (req, res) => {
       return ApiResponse.error(res, "Continent ID and Activity ID are required", 400);
     }
 
-    const inputPath = req.file.path;
-    const watermarkedFilename = `watermarked_${req.file.filename}`;
-    const outputPath = path.join('videos', watermarkedFilename);
-    const watermarkPath = path.join('assets', 'mark.png');
+    // ensureDirectoryExists(path.join(__dirname, '../videos'));
+    // ensureDirectoryExists(path.join(__dirname, '../assets'));
 
     // Check if watermark exists
+    const watermarkPath = path.join(__dirname, '../assets/mark.png');
     if (!fs.existsSync(watermarkPath)) {
-      fs.unlinkSync(inputPath);
+      fs.unlinkSync(req.file.path);
       return ApiResponse.error(res, "Watermark image not found", 400);
     }
 
-    // Process video with watermark
-    // await new Promise((resolve, reject) => {
-    //   ffmpeg(inputPath)
-    //     .input(watermarkPath)
-    //     .complexFilter([
-    //       // First scale the watermark to 150x150
-    //       {
-    //         filter: 'scale',
-    //         options: {
-    //           w: 450,
-    //           h: 150
-    //         },
-    //         inputs: '[1]',  // Apply to watermark (second input)
-    //         outputs: 'scaled_wm'
-    //       },
-    //       // Then overlay the scaled watermark at top-right
-    //       {
-    //         filter: 'overlay',
-    //         options: {
-    //           x: 'main_w-overlay_w-30', // 10px from right
-    //           y: 60                    // 10px from top
-    //         },
-    //         inputs: ['0', 'scaled_wm']
-    //       }
-    //     ])
-    //     .on('start', (commandLine) => {
-    //       console.log('Spawned FFmpeg with command: ' + commandLine);
-    //     })
-    //     .on('progress', (progress) => {
-    //       // console.log(`Processing: ${JSON.stringify(progress)}% done`);
-    //     })
-    //     .on('error', (err) => {
-    //       console.error('Error:', err);
-    //       fs.unlinkSync(inputPath);
-    //       reject(err);
-    //     })
-    //     .on('end', () => {
-    //       console.log('Video processing finished');
-    //       resolve();
-    //     })
-    //     .save(outputPath);
-    // });
-    await new Promise((resolve, reject) => {
-      ffmpeg(inputPath)
-        .input(watermarkPath)
-        .complexFilter([
-          // Force watermark to a fixed width of 200px (adjust as needed), keeping aspect ratio
-          {
-            filter: 'scale',
-            options: {
-              w: 200,
-              h: -1
-            },
-            inputs: '1',
-            outputs: 'wm_scaled'
-          },
-          // Overlay at top-right corner with consistent margin
-          {
-            filter: 'overlay',
-            options: {
-              x: 'main_w-overlay_w-30', // 30px from right edge
-              y: 40                      // 40px from top
-            },
-            inputs: ['0', 'wm_scaled']
-          }
-        ])
-        .on('start', (commandLine) => {
-          console.log('Spawned FFmpeg with command: ' + commandLine);
-        })
-        .on('error', (err) => {
-          console.error('Error:', err);
-          fs.unlinkSync(inputPath);
-          reject(err);
-        })
-        .on('end', () => {
-          console.log('Video processing finished');
-          resolve();
-        })
-        .save(outputPath);
-    });
+    // Generate short filename
+    const timestamp = Date.now();
+    const ext = path.extname(req.file.originalname);
+    const finalFilename = `vid_${timestamp}_wm${ext}`;
+
+    // Step 1: Compress video
+    compressedPath = path.join(__dirname, `../videos/${finalFilename}_compressed${ext}`);
+    await compressVideo(req.file.path, compressedPath);
+
+    // Step 2: Add watermark
+    watermarkedPath = path.join(__dirname, `../videos/${finalFilename}`);
+    await processVideoWithWatermark(compressedPath, watermarkedPath, watermarkPath);
+
+    // Get video duration
+    const duration = req.body.duration || await getVideoDuration(watermarkedPath);
 
     // Create video record in database
     const video = await Video.create({
       userId: req.user.id,
       originalName: req.file.originalname,
-      fileName: watermarkedFilename,
-      filePath: outputPath,
-      fileSize: fs.statSync(outputPath).size,
+      fileName: finalFilename,
+      filePath: watermarkedPath,
+      fileSize: fs.statSync(watermarkedPath).size,
       mimeType: req.file.mimetype,
-      fileUrl: `/videos/${watermarkedFilename}`,
+      fileUrl: `/videos/${finalFilename}`,
       continentId: req.body.continentId,
       activityId: req.body.activityId,
       isPromotion: req.body.isPromotion || false,
+      duration: duration
     });
 
-    // Clean up original file
-    fs.unlinkSync(inputPath);
+    // Clean up temporary files
+    [req.file.path, compressedPath].forEach(filePath => {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    });
 
-    return ApiResponse.created(res, "Video uploaded and watermarked successfully", video);
+    return ApiResponse.created(res, "Video processed and uploaded successfully", video);
+
   } catch (error) {
     console.error("Upload error:", error);
-    // Clean up any remaining files
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-    if (fs.existsSync(outputPath)) {
-      fs.unlinkSync(outputPath);
-    }
-    return ApiResponse.error(res, "Failed to upload video", 500, error);
-  }
-};
-// exports.uploadVideoLocal = async (req, res) => {
-//   let outputPath; // Define outputPath at the start
-//   let thumbnailPath; // Define thumbnailPath at the start
-//   try {
-//     if (!req.file) {
-//       return ApiResponse.error(res, "No file uploaded", 400);
-//     }
 
-//     // Verify user exists
-//     const user = await User.findByPk(req.user.id);
-//     if (!user) {
-//       fs.unlinkSync(req.file.path);
-//       return ApiResponse.error(res, "User not found", 404);
-//     }
+    // Clean up any partial files
+    const filesToClean = [
+      req.file?.path,
+      compressedPath,
+      watermarkedPath
+    ].filter(filePath => filePath && fs.existsSync(filePath));
 
-//     // Validate required fields
-//     if (!req.body.continentId || !req.body.activityId) {
-//       fs.unlinkSync(req.file.path);
-//       return ApiResponse.error(res, "Continent ID and Activity ID are required", 400);
-//     }
-
-//     const inputPath = req.file.path;
-//     const watermarkedFilename = `watermarked_${req.file.filename}`;
-//     outputPath = path.join('videos', watermarkedFilename); // Assign outputPath
-//     const watermarkPath = path.join('assets', 'mark.png');
-//     const thumbnailFilename = `thumb_${req.file.filename.replace(/\.[^/.]+$/, '')}.jpg`;
-//     thumbnailPath = path.join('thumbnails', thumbnailFilename); // Assign thumbnailPath
-
-//     // Check if watermark exists
-//     if (!fs.existsSync(watermarkPath)) {
-//       fs.unlinkSync(inputPath);
-//       return ApiResponse.error(res, "Watermark image not found", 400);
-//     }
-
-//     // Ensure thumbnails directory exists
-//     if (!fs.existsSync('thumbnails')) {
-//       fs.mkdirSync('thumbnails', { recursive: true });
-//     }
-
-//     // Process video with watermark and generate thumbnail with watermark
-//     await new Promise((resolve, reject) => {
-//       ffmpeg(inputPath)
-//         .input(watermarkPath)
-//         .complexFilter([
-//           // Scale the watermark to 450x150 for video
-//           {
-//             filter: 'scale',
-//             options: {
-//               w: 450,
-//               h: 150
-//             },
-//             inputs: '[1]', // Apply to watermark (second input)
-//             outputs: 'scaled_wm_video'
-//           },
-//           // Overlay the scaled watermark on the video at top-right
-//           {
-//             filter: 'overlay',
-//             options: {
-//               x: 'main_w-overlay_w-30', // 10px from right
-//               y: 60                    // 10px from top
-//             },
-//             inputs: ['0', 'scaled_wm_video'],
-//             outputs: 'watermarked'
-//           },
-//           // Scale the main video to 300x300 for thumbnail
-//           {
-//             filter: 'scale',
-//             options: {
-//               w: 300,
-//               h: 300
-//             },
-//             inputs: '[0]', // Use main video input
-//             outputs: 'thumb_scaled'
-//           },
-//           // Scale the watermark to 150x50 for thumbnail
-//           {
-//             filter: 'scale',
-//             options: {
-//               w: 150,
-//               h: 50
-//             },
-//             inputs: '[1]', // Apply to watermark (second input)
-//             outputs: 'scaled_wm_thumb'
-//           },
-//           // Overlay the scaled watermark on the thumbnail
-//           {
-//             filter: 'overlay',
-//             options: {
-//               x: 'main_w-overlay_w-10', // 10px from right
-//               y: 10                    // 10px from top
-//             },
-//             inputs: ['thumb_scaled', 'scaled_wm_thumb'],
-//             outputs: 'thumb'
-//           }
-//         ])
-//         .output(thumbnailPath)
-//         .outputOptions([
-//           '-map [thumb]', // Map the watermarked thumbnail output
-//           '-vframes 1',   // Extract one frame
-//           '-ss 5'         // At 5 seconds
-//         ])
-//         .output(outputPath)
-//         .outputOptions([
-//           '-map [watermarked]' // Map the watermarked video output
-//         ])
-//         .on('start', (commandLine) => {
-//           console.log('Spawned FFmpeg with command: ' + commandLine);
-//         })
-//         .on('progress', (progress) => {
-//           // console.log(`Processing: ${JSON.stringify(progress)}% done`);
-//         })
-//         .on('error', (err) => {
-//           console.error('Error:', err);
-//           fs.unlinkSync(inputPath);
-//           reject(err);
-//         })
-//         .on('end', () => {
-//           console.log('Video processing and thumbnail generation finished');
-//           resolve();
-//         })
-//         .run();
-//     });
-
-//     // Create video record in database
-//     const video = await Video.create({
-//       userId: req.user.id,
-//       originalName: req.file.originalname,
-//       fileName: watermarkedFilename,
-//       filePath: outputPath,
-//       fileSize: fs.statSync(outputPath).size,
-//       mimeType: req.file.mimetype,
-//       fileUrl: `/videos/${watermarkedFilename}`,
-//       thumbnailPath: `/thumbnails/${thumbnailFilename}`,
-//       continentId: req.body.continentId,
-//       activityId: req.body.activityId,
-//     });
-
-//     // Clean up original file
-//     fs.unlinkSync(inputPath);
-
-//     return ApiResponse.created(res, "Video uploaded, watermarked, and thumbnail generated successfully", video);
-//   } catch (error) {
-//     console.error("Upload error:", error);
-//     // Clean up any remaining files
-//     if (req.file && fs.existsSync(req.file.path)) {
-//       fs.unlinkSync(req.file.path);
-//     }
-//     if (outputPath && fs.existsSync(outputPath)) {
-//       fs.unlinkSync(outputPath);
-//     }
-//     if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-//       fs.unlinkSync(thumbnailPath);
-//     }
-//     return ApiResponse.error(res, "Failed to upload video", 500, error);
-//   }
-// };
-
-exports.editVideo = async (req, res) => {
-  try {
-    const { id, title, description, continentId, activityId } = req.body;
-    const userId = req.user.id;
-    const video = await Video.findOne({
-      where: {
-        id,
-        userId
+    filesToClean.forEach(filePath => {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (cleanError) {
+        console.error("Error cleaning up file:", cleanError);
       }
     });
 
+    return ApiResponse.error(res, "Failed to process video", 500, error);
+  }
+};
+
+exports.editVideo = async (req, res) => {
+  let tempFilePath = '';
+
+  try {
+    const { videoId } = req.body;
+    const video = await Video.findByPk(videoId);
+
     if (!video) {
-      return ApiResponse.error(res, "Video not found or unauthorized", 404);
+      return ApiResponse.error(res, "Video not found", 404);
     }
 
-    const updatableFields = {};
-    if (title) updatableFields.title = title;
-    if (description) updatableFields.description = description;
-    if (continentId) updatableFields.continentId = continentId;
-    if (activityId) updatableFields.activityId = activityId;
-
-    if (Object.keys(updatableFields).length > 0) {
-      await video.update(updatableFields);
-      return ApiResponse.success(res, "Video updated successfully", video);
+    // Verify ownership
+    if (video.userId !== req.user.id) {
+      return ApiResponse.error(res, "Unauthorized", 403);
     }
 
-    return ApiResponse.error(res, "No valid fields provided for update", 400);
+    const updates = {};
+    // Update other fields (continentId, activityId, etc.)
+
+    if (req.file) {
+      // Process the new file (watermark, compression, etc.)
+      const ext = path.extname(req.file.originalname);
+      tempFilePath = path.join('videos', `processed_${Date.now()}${ext}`);
+
+      await processVideoWithWatermark(
+        req.file.path,
+        tempFilePath,
+        path.join('assets', 'mark.png')
+      );
+
+      // Determine if this was originally an S3 video
+      const isS3 = isCloudFrontUrl(video.fileUrl);
+      console.log('isS3: ', isS3);
+
+      if (isS3) {
+        const newKey = `videos/user_${req.user.id}/${Date.now()}${ext}`;
+
+        const result = await updateInS3(
+          tempFilePath,
+          process.env.S3_BUCKET_NAME,
+          newKey,
+          req.file.mimetype,
+          video.filePath
+        );
+
+        updates.filePath = result.Key;
+        updates.fileUrl = result.Location;
+        updates.fileName = path.basename(newKey);
+        updates.fileSize = fs.statSync(tempFilePath).size;
+        updates.mimeType = req.file.mimetype;
+      } else {
+        // Handle local file update
+        const newFilePath = path.join('videos', `processed_${Date.now()}${ext}`);
+        fs.renameSync(tempFilePath, newFilePath);
+
+        // Delete old local file if exists
+        if (video.filePath && fs.existsSync(video.filePath)) {
+          fs.unlinkSync(video.filePath);
+        }
+
+        updates.filePath = newFilePath;
+        updates.fileUrl = `/videos/${path.basename(newFilePath)}`;
+        updates.fileName = path.basename(newFilePath);
+        updates.fileSize = fs.statSync(newFilePath).size;
+        updates.mimeType = req.file.mimetype;
+      }
+
+      // Clean up processed file
+      if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+      // Clean up original upload
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    }
+
+    await video.update(updates);
+    return ApiResponse.success(res, "Video updated", video);
 
   } catch (error) {
-    console.error("Edit video error:", error);
+    // Clean up any temporary files
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      fs.unlinkSync(tempFilePath);
+    }
+    if (req.file?.path && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+
+    console.error("Edit error:", error);
     return ApiResponse.error(res, "Failed to update video", 500, error);
   }
 };
 
 exports.getUserVideos = async (req, res) => {
   try {
+    const userId = req.query.userId;
+
+    if (!userId) {
+      return ApiResponse.error(res, "User ID is required", 400);
+    }
+
+    let order = [['createdAt', 'DESC']];
+
+    const videoWhere = { userId };
     const videos = await Video.findAll({
-      where: { userId: req.user.id },
-      attributes: ["id", "title", "description", "fileName"],
+      where: videoWhere,
+      attributes: {
+        include: [
+          [
+            Sequelize.literal(`(
+              SELECT COUNT(*) FROM Likes AS likes
+              WHERE likes.videoId = Video.id
+            )`),
+            "likeCount",
+          ],
+          [
+            Sequelize.literal(`(
+              SELECT COUNT(*) FROM Ratings AS ratings
+              WHERE ratings.videoId = Video.id
+            )`),
+            "ratingCount",
+          ],
+        ],
+        exclude: ["filePath", "fileSize", "mimeType", "originalName"],
+      },
       include: [
-        { model: User, as: "user", attributes: ["id", "name"] },
+        { model: User, as: "user", attributes: ["id", "name", "profileImage"] },
         { model: Continent, as: "continent", attributes: ["id", "name"] },
-        {
-          model: Rating,
-          as: "ratings",
-          attributes: ["id", "stars", "createdAt"],
-          include: [{ model: User, as: "user", attributes: ["id", "name"] }],
-        },
         {
           model: Like,
           as: "likes",
-          attributes: ["id", "createdAt"],
-          include: [{ model: User, as: "user", attributes: ["id", "name"] }],
+          attributes: [],
         },
+        {
+          model: Continent,
+          as: "ratingContinents",
+          attributes: ["id", "name"]
+        }
       ],
+      order,
+      subQuery: false,
     });
 
-    // Map through videos and add URL to each
-    const videosWithUrls = videos.map((video) => ({
-      ...video.get({ plain: true }),
-      url: `/videos/${video.fileName}`,
-    }));
-    return ApiResponse.success(
-      res,
-      "User videos fetched successfully",
-      videos
-    );
+    // Process videos
+    const videosWithUrls = videos.map((video) => {
+      const plainVideo = video.get({ plain: true });
+      return {
+        ...plainVideo,
+        url: `/videos/${video.fileName}`,
+      };
+    });
+
+    return ApiResponse.success(res, "User videos fetched successfully", {
+      videos: videosWithUrls,
+    });
   } catch (error) {
-    console.error("Error fetching videos:", error);
-    return ApiResponse.error(res, "Failed to fetch videos", 500, error);
+    console.error("Error fetching user videos:", error);
+    return ApiResponse.error(res, "Failed to fetch user videos", 500, error);
   }
 };
 
 // In your video controller file
 exports.getPromotionVideos = async (req, res) => {
   try {
-    const { userId } = req.body; 
+    const { userId } = req.body;
 
     // Validate input
     if (!userId) {
@@ -435,83 +421,6 @@ exports.getPromotionVideos = async (req, res) => {
   }
 };
 
-// exports.getAllVideos = async (req, res) => {
-//   try {
-//     const page = parseInt(req.query.page) || 1;
-//     const limit = parseInt(req.query.limit) || 10;
-//     const offset = (page - 1) * limit;
-
-//     const sort = req.query.sort || 'latest';
-//     const continentId = req.query.continentId;
-//     const activityId = req.query.activityId;
-
-//     let order = [['createdAt', 'DESC']]; // Default sort: latest
-//     if (sort === 'popular') {
-//       order = [['viewCount', 'DESC']];
-//     }
-
-//     // Build where clause dynamically
-//     const where = {};
-//     if (continentId) where.continentId = continentId;
-//     if (activityId) where.activityId = activityId;
-
-//     const { count, rows: videos } = await Video.findAndCountAll({
-//       where,
-//       attributes: {
-//         include: [
-//           [
-//             Sequelize.literal(`(
-//               SELECT COUNT(*) FROM Likes AS likes
-//               WHERE likes.videoId = Video.id
-//             )`),
-//             "likeCount",
-//           ],
-//         ],
-//         exclude: ["filePath", "fileSize", "mimeType", "originalName"],
-//       },
-//       include: [
-//         { model: User, as: "user", attributes: ["id", "name", "profileImage"] },
-//         { model: Continent, as: "continent", attributes: ["id", "name"] },
-//         {
-//           model: Rating,
-//           as: "ratings",
-//           attributes: ["id", "stars"],
-//           include: [{ model: User, as: "user", attributes: ["id", "name"] }],
-//         },
-//         {
-//           model: Like,
-//           as: "likes",
-//           attributes: [],
-//         },
-//         {
-//           model: Continent,
-//           as: "ratingContinents",
-//           attributes: ["id", "name"]
-//         }
-//       ],
-//       order,
-//       limit,
-//       offset,
-//       subQuery: false,
-//     });
-
-//     // Map through videos and add URL to each
-//     const videosWithUrls = videos.map((video) => ({
-//       ...video.get({ plain: true }),
-//       url: `/videos/${video.fileName}`,
-//     }));
-
-//     return ApiResponse.success(res, "All videos fetched successfully", {
-//       total: count,
-//       page,
-//       totalPages: Math.ceil(count / limit),
-//       videos: videosWithUrls,
-//     });
-//   } catch (error) {
-//     console.error("Error fetching all videos:", error);
-//     return ApiResponse.error(res, "Failed to fetch videos", 500, error);
-//   }
-// };
 exports.getAllVideos = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -687,55 +596,3 @@ exports.streamVideo = async (req, res) => {
     res.status(500).json({ error: "Failed to stream video" });
   }
 };
-
-
-// // FFmpeg command to overlay watermark at bottom right
-// // const cmd = `ffmpeg -i "${videoPath}" -i "${watermarkPath}" -filter_complex "overlay=W-w-10:H-h-10" -codec:a copy "${outputPath}"`;
-// const cmd = `ffmpeg -i "${videoPath}" -i "${watermarkPath}" -filter_complex "[1]scale=100:-1[wm];[0][wm]overlay=10:10" -codec:a copy "${outputPath}"`;
-
-
-// exec(cmd, (error, stdout, stderr) => {
-//   if (error) {
-//     // Only send response once
-//     if (!res.headersSent) {
-//       return res.status(500).send('Error processing video');
-//     }
-//     return;
-//   }
-
-//   // Ensure the file exists before trying to download
-//   fs.access(outputPath, fs.constants.F_OK, (err) => {
-//     if (err) {
-//       if (!res.headersSent) {
-//         return res.status(500).send('Watermarked video not found');
-//       }
-//       return;
-//     }
-
-//     return res.status(200).json({
-//       outputPath
-//     });
-//     // // res.download has a callback for errors
-//     // res.download(outputPath, (err) => {
-//     //   if (err && !res.headersSent) {
-//     //     return res.status(500).send('Error sending file');
-//     //   }
-//     //   // Optionally, clean up files after download
-//     //   fs.unlinkSync(videoPath);
-//     //   fs.unlinkSync(outputPath);
-//     // });
-//   });
-// });
-
-//  const videoPath = req.file.path;
-//   const outputPath = path.join('videos', `watermarked_${req.file.filename}`);
-//   const watermarkPath = path.join('assets', 'logo.png');
-//   // FFmpeg command to overlay watermark at bottom right
-//   const cmd = `ffmpeg -i ${videoPath} -i ${watermarkPath} -filter_complex "overlay=W-w-10:H-h-10" -codec:a copy ${outputPath}`;
-
-//   exec(cmd, (error, stdout, stderr) => {
-//     if (error) {
-//       return res.status(500).send('Error processing video');
-//     }
-//     res.download(outputPath);
-//   });

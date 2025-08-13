@@ -1,10 +1,8 @@
-const { Video, User, Rating, Like, Continent } = require("../models");
+const { Video, User, Report} = require("../models");
 const ApiResponse = require("../utils/apiResponse");
 
 exports.reportVideo = async (req, res) => {
-  const videoId = req.params.videoId;
-  const userId = req.user.id;
-  const { reason } = req.body;
+  const { reason, videoId, userId } = req.body;
 
   try {
     // Check if the video exists
@@ -43,12 +41,12 @@ exports.getReports = async (req, res) => {
         {
           model: User,
           as: "user",
-          attributes: ["id", "username"],
+          attributes: ["id", "name"],
         },
         {
           model: Video,
           as: "video",
-          attributes: ["id", "title"],
+          attributes: ["id"],
         },
       ],
     });

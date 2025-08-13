@@ -13,9 +13,17 @@ const Activitie = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
+    imageUrl: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    imagePath: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    }
   },
   {
-    timestamps: true,
+    timestamps: false,
   }
 );
 

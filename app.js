@@ -12,6 +12,7 @@ const activityRoutes = require("./routes/activityRoutes");
 const continentRoutes = require("./routes/continentRoutes");
 const countriesRoutes = require("./routes/countryRoutes");
 const videoRoutes = require("./routes/videoRoutes");
+const helpRoutes = require('./routes/helpRoutes');
 
 const app = express();
 
@@ -36,6 +37,7 @@ app.use("/api/v1/activity", activityRoutes);
 app.use("/api/v1/countries", countriesRoutes);
 app.use("/api/v1/videos", videoRoutes);
 app.use("/api/v1/user", userRoutes);
+app.use('/api/v1/help', helpRoutes);
 app.use("/api/v1/auth", authRoutes);
 
 const PORT = process.env.PORT || 3000;

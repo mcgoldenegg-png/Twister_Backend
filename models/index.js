@@ -8,12 +8,14 @@ const Continent = require('./Continent');
 const Activity = require('./Activitie');
 const Country = require('./Country');
 const VideoContinentRating = require('./VideoContinentRating');
+const Help = require('./Help');
 // Initialize associations
 const models = {
   User,
   Video,
   Rating,
   Like,
+  Help,
   Report,
   Continent,
   Activity,
